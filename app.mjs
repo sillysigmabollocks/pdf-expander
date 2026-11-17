@@ -168,6 +168,25 @@ dropzone.addEventListener('drop', (event) => {
   void selectFile(transferredFiles(event.dataTransfer));
 });
 
+function pdfFromShortcut(text) {
+  const encoded = text.trim().replace(/\s+/g, '');
+  if (!encoded || encoded.length % 4) return null;
+  try {
+    if (!atob(encoded.slice(0, 1368)).includes('%PDF-')) return null;
+    const bytes = new Uint8Array(encoded.length / 4 * 3 - (encoded.endsWith('==') ? 2 : Number(encoded.endsWith('='))));
+    for (let offset = 0; offset < encoded.length; offset += 65536) {
+      const chunk = atob(encoded.slice(offset, offset + 65536));
+      const byteOffset = offset / 4 * 3;
+      for (let index = 0; index < chunk.length; index++) {
+        bytes[byteOffset + index] = chunk.charCodeAt(index);
+      }
+    }
+    return new File([bytes], 'Canvas.pdf', { type: 'application/pdf' });
+  } catch {
+    return null;
+  }
+}
+
 let pasteAttempt = 0;
 
 pasteButton.addEventListener('click', async () => {
@@ -182,9 +201,19 @@ pasteButton.addEventListener('click', async () => {
   const isCurrent = () => attempt === pasteAttempt && request === fileRequest && !building;
   try {
     const files = [];
-    for (const item of await navigator.clipboard.read()) {
+    const items = await navigator.clipboard.read();
+    for (const item of items) {
       const type = item.types.find((value) => /^(?:web )?application\/(?:x-)?pdf$|^com\.adobe\.pdf$/i.test(value));
       if (type) files.push(new File([await item.getType(type)], 'Pasted.pdf', { type: 'application/pdf' }));
+    }
+    if (!isCurrent()) return;
+    if (!files.length) {
+      for (const item of items) {
+        if (!item.types.includes('text/plain')) continue;
+        const encoded = await (await item.getType('text/plain')).text();
+        const pdf = pdfFromShortcut(encoded);
+        if (pdf) { files.push(pdf); break; }
+      }
     }
     if (!isCurrent()) return;
     if (files.length) {
@@ -203,10 +232,15 @@ function handleNativePaste(event, data) {
   if (!inPasteField && !files.length) return;
   ++pasteAttempt;
   event.preventDefault();
+  if (!files.length && inPasteField) {
+    const encoded = data?.getData?.('text/plain') || '';
+    const pdf = pdfFromShortcut(encoded);
+    if (pdf) files.push(pdf);
+  }
   if (files.length) {
     void selectFile(files, inPasteField ? 'pasteStatus' : 'status');
   } else {
-    status('This paste did not include a PDF file. Tap Choose PDF to open it from Files.', true, 'pasteStatus');
+    status('This paste did not include a PDF. In Canvas, use Share → Send to PDF Expander and try again.', true, 'pasteStatus');
   }
 }
 
