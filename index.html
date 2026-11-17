@@ -34,8 +34,9 @@
             </div>
           </div>
           <div id="pasteBox" hidden>
-            <div id="pasteTarget" contenteditable="plaintext-only" tabindex="0" inputmode="none" spellcheck="false" role="textbox" aria-label="Paste a copied PDF here"></div>
-            <p class="muted paste-hint">Long-press the box and tap Paste, or press ⌘V.</p>
+            <div id="pasteTarget" contenteditable="true" tabindex="0" spellcheck="false" role="textbox" aria-label="Paste a copied PDF here" aria-describedby="pasteHint"><br></div>
+            <p id="pasteHint" class="muted paste-hint">In Files, copy the PDF. Touch and hold this field, then tap Paste. With a keyboard, press ⌘V.</p>
+            <p id="pasteStatus" role="status" hidden></p>
           </div>
         </section>
         <section class="card settings" aria-labelledby="settings-heading">

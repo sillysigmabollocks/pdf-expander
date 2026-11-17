@@ -101,7 +101,7 @@ function fileSize(bytes) {
   return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
-async function selectFile(candidates) {
+async function selectFile(candidates, statusId = 'status') {
   if (building || !candidates.length) return;
   const request = ++fileRequest;
   let pdf;
@@ -118,13 +118,14 @@ async function selectFile(candidates) {
   }
   if (building || request !== fileRequest) return;
   if (!pdf) {
-    status('That item could not be read as a PDF. Choose a PDF from Files.', true);
+    status('This item does not contain a readable PDF. Tap Choose PDF to open it from Files.', true, statusId);
     return;
   }
   selectedFile = pdf;
   pasteBox.hidden = true;
   pasteButton.setAttribute('aria-expanded', 'false');
-  pasteTarget.textContent = '';
+  pasteTarget.replaceChildren(document.createElement('br'));
+  status('', false, 'pasteStatus');
   byId('fileName').textContent = pdf.name || 'Pasted PDF';
   byId('fileInfo').textContent = fileSize(pdf.size);
   dropzone.classList.add('loaded');
@@ -152,7 +153,9 @@ fileInput.addEventListener('change', () => {
 });
 
 dropzone.addEventListener('dragover', (event) => {
-  if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
+  const data = event.dataTransfer;
+  if (!Array.from(data?.types || []).includes('Files') &&
+      !Array.from(data?.items || []).some((item) => item.kind === 'file')) return;
   event.preventDefault();
   dropzone.classList.add('dragover');
 });
@@ -165,36 +168,54 @@ dropzone.addEventListener('drop', (event) => {
   void selectFile(transferredFiles(event.dataTransfer));
 });
 
-const touchApple = /iPad|iPhone|iPod/.test(navigator.userAgent)
-  || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+let pasteAttempt = 0;
+
 pasteButton.addEventListener('click', async () => {
   pasteBox.hidden = false;
   pasteButton.setAttribute('aria-expanded', 'true');
   pasteTarget.focus();
-  status();
-  if (touchApple || !navigator.clipboard?.read) return;
+  status('', false, 'pasteStatus');
+  if (!navigator.clipboard?.read) return;
+
+  const attempt = ++pasteAttempt;
   const request = fileRequest;
+  const isCurrent = () => attempt === pasteAttempt && request === fileRequest && !building;
   try {
     const files = [];
     for (const item of await navigator.clipboard.read()) {
-      const type = item.types.find((value) => value.toLowerCase() === 'application/pdf');
-      if (type) files.push(new File([await item.getType(type)], 'Pasted.pdf', { type }));
+      const type = item.types.find((value) => /^(?:web )?application\/(?:x-)?pdf$|^com\.adobe\.pdf$/i.test(value));
+      if (type) files.push(new File([await item.getType(type)], 'Pasted.pdf', { type: 'application/pdf' }));
     }
-    if (request === fileRequest) await selectFile(files);
+    if (!isCurrent()) return;
+    if (files.length) {
+      await selectFile(files, 'pasteStatus');
+    } else {
+      status('Touch and hold the field below the Paste PDF button, then tap Paste. You can also tap Choose PDF.', false, 'pasteStatus');
+    }
   } catch {
-    // The focused field also accepts an ordinary browser paste event.
+    // Native paste can still provide a file if async clipboard access is denied.
   }
 });
 
-document.addEventListener('paste', (event) => {
-  const files = transferredFiles(event.clipboardData);
+function handleNativePaste(event, data) {
+  const inPasteField = pasteTarget.contains(event.target);
+  const files = transferredFiles(data);
+  if (!inPasteField && !files.length) return;
+  ++pasteAttempt;
+  event.preventDefault();
   if (files.length) {
-    event.preventDefault();
-    void selectFile(files);
-  } else if (event.target === pasteTarget) {
-    event.preventDefault();
-    status('Safari did not pass a PDF from the clipboard. Use Choose PDF or drag it from Files.', true);
+    void selectFile(files, inPasteField ? 'pasteStatus' : 'status');
+  } else {
+    status('This paste did not include a PDF file. Tap Choose PDF to open it from Files.', true, 'pasteStatus');
   }
+}
+
+document.addEventListener('paste', (event) => {
+  handleNativePaste(event, event.clipboardData);
+});
+
+pasteTarget.addEventListener('beforeinput', (event) => {
+  if (event.inputType === 'insertFromPaste') handleNativePaste(event, event.dataTransfer);
 });
 
 controls.addEventListener('input', () => {
