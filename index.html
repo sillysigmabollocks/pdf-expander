@@ -6,9 +6,9 @@
   <meta name="theme-color" content="#f4f3ee">
   <meta name="description" content="Add a note margin to every page of a PDF, preview it, and share it to Goodnotes.">
   <title>PDF Margin Notes</title>
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=ipados-paste-1">
   <script defer src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js" integrity="sha384-weMABwrltA6jWR8DDe9Jp5blk+tZQh7ugpCsF3JwSA53WZM9/14PjS5LAJNHNjAI" crossorigin="anonymous"></script>
-  <script type="module" src="./app.mjs"></script>
+  <script type="module" src="./app.mjs?v=ipados-paste-1"></script>
 </head>
 <body>
   <main class="workspace">
@@ -22,26 +22,26 @@
     <div class="layout">
       <div class="controls">
         <section class="card source" aria-labelledby="source-heading">
-          <h2 id="source-heading">Source PDF</h2>
+          <h2 id="source-heading">Source file</h2>
           <div class="dropzone" id="dropzone">
             <div class="document-icon" aria-hidden="true"><i></i></div>
-            <p id="fileName">Drop a PDF here</p>
+            <p id="fileName">Drop a PDF or image here</p>
             <p id="fileInfo" class="muted">Or choose one from Files.</p>
-            <input type="file" id="file" accept="application/pdf,.pdf" hidden>
+            <input type="file" id="file" accept="application/pdf,image/*" hidden>
             <div class="input-actions">
-              <button id="choose" type="button" class="button primary">Choose PDF</button>
-              <button id="paste" type="button" class="button secondary" aria-controls="pasteBox" aria-expanded="false">Paste PDF</button>
+              <button id="choose" type="button" class="button primary">Choose file</button>
+              <button id="paste" type="button" class="button secondary">Paste from Clipboard</button>
             </div>
           </div>
-          <div id="pasteBox" hidden>
-            <div id="pasteTarget" contenteditable="true" tabindex="0" spellcheck="false" role="textbox" aria-label="Paste a copied PDF here" aria-describedby="pasteHint"><br></div>
-            <p id="pasteHint" class="muted paste-hint">In Files, copy the PDF. Touch and hold this field, then tap Paste. With a keyboard, press ⌘V.</p>
-            <p id="pasteStatus" role="status" hidden></p>
-            <details>
-              <summary>Import from Canvas on iPad</summary>
-              <p class="muted">In Shortcuts, create “Send to PDF Expander.” Turn on Show in Share Sheet and accept PDFs. Add Base64 Encode (Shortcut Input), Copy to Clipboard (Base64 Encoded), then a URL action with this page’s address, followed by Open URLs. Then share a PDF from Canvas to your shortcut and tap Paste PDF here.</p>
-            </details>
+          <div class="paste-field">
+            <div id="pasteTarget" contenteditable="true" tabindex="0" spellcheck="false" role="textbox" aria-label="Paste a PDF or image" aria-describedby="pasteHint"><br></div>
+            <span id="pasteHint">Tap here, then tap Paste (or press ⌘V)</span>
           </div>
+          <div role="status"><p id="pasteStatus" hidden></p></div>
+          <details class="paste-help">
+            <summary>Import from Canvas on iPad</summary>
+            <p class="muted">In Shortcuts, create “Send to PDF Expander.” Turn on Show in Share Sheet and accept PDFs. Add Base64 Encode (Shortcut Input), Copy to Clipboard (Base64 Encoded), then a URL action with this page’s address, followed by Open URLs. Then share a PDF from Canvas to your shortcut and tap Paste from Clipboard here.</p>
+          </details>
         </section>
         <section class="card settings" aria-labelledby="settings-heading">
           <h2 id="settings-heading">Notes layout</h2>
@@ -92,7 +92,7 @@
               <div id="sampleNotes" class="sample-notes"><i></i></div>
               <div class="sample-source"><b></b><span></span><span></span><span></span><div class="sample-chart"><i></i><i></i><i></i><i></i></div><span></span><span></span></div>
             </div>
-            <p id="stageMessage">Choose a PDF to get started</p>
+            <p id="stageMessage">Choose a PDF or image to get started</p>
           </div>
           <div id="canvasSlot" class="canvas-slot" hidden></div>
         </div>

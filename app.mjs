@@ -3,7 +3,6 @@ const fileInput = byId('file');
 const chooseButton = byId('choose');
 const pasteButton = byId('paste');
 const dropzone = byId('dropzone');
-const pasteBox = byId('pasteBox');
 const pasteTarget = byId('pasteTarget');
 const controls = byId('settings');
 const buildButton = byId('build');
@@ -19,6 +18,7 @@ const result = byId('result');
 const openLink = byId('open');
 const downloadLink = byId('download');
 const share = byId('share');
+const unreadablePaste = 'No readable PDF or image was pasted. iPadOS may block PDFs copied from Files. Tap Choose file to open it instead.';
 
 let selectedFile;
 let outputFile;
@@ -91,6 +91,7 @@ function clearResult(message) {
 
 function setBusy(busy) {
   building = busy;
+  if (busy) fileRequest++;
   controls.disabled = busy;
   buildButton.disabled = busy || !selectedFile;
   chooseButton.disabled = busy;
@@ -101,11 +102,48 @@ function fileSize(bytes) {
   return bytes >= 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
+function isImageType(type) {
+  return /^image\//i.test(type);
+}
+
+async function pdfFromImage(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.src = url;
+    await image.decode();
+    const longestSide = Math.max(image.naturalWidth, image.naturalHeight);
+    // Keep the canvas within iPadOS's pixel limit for large photos.
+    const canvasScale = Math.min(1, 4096 / longestSide);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.floor(image.naturalWidth * canvasScale));
+    canvas.height = Math.max(1, Math.floor(image.naturalHeight * canvasScale));
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Could not draw the image.');
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const png = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!png) throw new Error('Could not encode the image.');
+
+    const doc = await window.PDFLib.PDFDocument.create();
+    const embedded = await doc.embedPng(await png.arrayBuffer());
+    const pageScale = Math.min(0.75, 792 / longestSide);
+    const width = image.naturalWidth * pageScale;
+    const height = image.naturalHeight * pageScale;
+    const page = doc.addPage([width, height]);
+    page.drawImage(embedded, { x: 0, y: 0, width, height });
+    const name = file.name.replace(/\.[^.]+$/, '') || 'Pasted image';
+    return new File([await doc.save()], `${name}.pdf`, { type: 'application/pdf' });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
 async function selectFile(candidates, statusId = 'status') {
   if (building || !candidates.length) return;
   const request = ++fileRequest;
   let pdf;
   for (const candidate of candidates) {
+    if (isImageType(candidate.type)) continue;
     try {
       const header = await candidate.slice(0, 1024).text();
       if (header.includes('%PDF-')) {
@@ -116,15 +154,25 @@ async function selectFile(candidates, statusId = 'status') {
       continue;
     }
   }
+  if (!pdf) {
+    for (const candidate of candidates) {
+      if (building || request !== fileRequest) return;
+      if (!isImageType(candidate.type)) continue;
+      try {
+        pdf = await pdfFromImage(candidate);
+        break;
+      } catch {
+        continue;
+      }
+    }
+  }
   if (building || request !== fileRequest) return;
   if (!pdf) {
-    status('This item does not contain a readable PDF. Tap Choose PDF to open it from Files.', true, statusId);
+    status(statusId === 'pasteStatus' ? unreadablePaste : 'Choose a readable PDF or an image your browser can open.', true, statusId);
     return;
   }
   selectedFile = pdf;
-  pasteBox.hidden = true;
-  pasteButton.setAttribute('aria-expanded', 'false');
-  pasteTarget.replaceChildren(document.createElement('br'));
+  resetPasteTarget();
   status('', false, 'pasteStatus');
   byId('fileName').textContent = pdf.name || 'Pasted PDF';
   byId('fileInfo').textContent = fileSize(pdf.size);
@@ -142,7 +190,7 @@ function transferredFiles(data) {
     const file = item.getAsFile();
     if (file) files.push(file);
   }
-  return files;
+  return [...new Set(files)];
 }
 
 chooseButton.addEventListener('click', () => fileInput.click());
@@ -187,70 +235,94 @@ function pdfFromShortcut(text) {
   }
 }
 
-let pasteAttempt = 0;
+async function clipboardFiles(items) {
+  const files = [];
+  const formats = items.flatMap((item) => item.types.map((type) => ({ item, type })));
+  const pdfFormats = formats.filter(({ type }) => /^(?:(?:web )?application\/(?:x-)?pdf|com\.adobe\.pdf)$/i.test(type));
+  const imageFormats = formats.filter(({ type }) => isImageType(type));
+  for (const { item, type } of [...pdfFormats, ...imageFormats]) {
+    try {
+      const blob = await item.getType(type);
+      if (!blob.size) continue;
+      files.push(isImageType(type)
+        ? new File([blob], 'Pasted image', { type })
+        : new File([blob], 'Pasted.pdf', { type: 'application/pdf' }));
+    } catch {
+      // Other clipboard representations may still be readable.
+    }
+  }
+  if (files.length) return files;
+
+  for (const { item, type } of formats) {
+    if (type !== 'text/plain') continue;
+    try {
+      const blob = await item.getType(type);
+      const pdf = pdfFromShortcut(await blob.text());
+      if (pdf) return [pdf];
+    } catch {
+      // A later text item may still contain a PDF from the Canvas shortcut.
+    }
+  }
+  return files;
+}
 
 pasteButton.addEventListener('click', async () => {
-  pasteBox.hidden = false;
-  pasteButton.setAttribute('aria-expanded', 'true');
-  pasteTarget.focus();
-  status('', false, 'pasteStatus');
-  if (!navigator.clipboard?.read) return;
-
-  const attempt = ++pasteAttempt;
-  const request = fileRequest;
-  const isCurrent = () => attempt === pasteAttempt && request === fileRequest && !building;
+  const request = ++fileRequest;
+  let items;
   try {
-    const files = [];
-    const items = await navigator.clipboard.read();
-    for (const item of items) {
-      const type = item.types.find((value) => /^(?:web )?application\/(?:x-)?pdf$|^com\.adobe\.pdf$/i.test(value));
-      if (type) files.push(new File([await item.getType(type)], 'Pasted.pdf', { type: 'application/pdf' }));
-    }
-    if (!isCurrent()) return;
-    if (!files.length) {
-      for (const item of items) {
-        if (!item.types.includes('text/plain')) continue;
-        const encoded = await (await item.getType('text/plain')).text();
-        const pdf = pdfFromShortcut(encoded);
-        if (pdf) { files.push(pdf); break; }
-      }
-    }
-    if (!isCurrent()) return;
-    if (files.length) {
-      await selectFile(files, 'pasteStatus');
-    } else {
-      status('Touch and hold the field below the Paste PDF button, then tap Paste. You can also tap Choose PDF.', false, 'pasteStatus');
-    }
+    // Start the read during the click so WebKit can show its native Paste prompt.
+    const read = navigator.clipboard.read();
+    status('', false, 'pasteStatus');
+    items = await read;
   } catch {
-    // Native paste can still provide a file if async clipboard access is denied.
+    if (request !== fileRequest || building) return;
+    pasteTarget.focus();
+    status('Touch and hold the paste field, then tap Paste, or press ⌘V. You can also tap Choose file.', false, 'pasteStatus');
+    return;
+  }
+  if (request !== fileRequest || building) return;
+  const files = await clipboardFiles(items);
+  if (request !== fileRequest || building) return;
+  if (files.length) {
+    await selectFile(files, 'pasteStatus');
+  } else {
+    status(unreadablePaste, false, 'pasteStatus');
   }
 });
 
-function handleNativePaste(event, data) {
-  const inPasteField = pasteTarget.contains(event.target);
+function resetPasteTarget() {
+  if (pasteTarget.childNodes.length === 1 && pasteTarget.firstChild.nodeName === 'BR') return;
+  pasteTarget.replaceChildren(document.createElement('br'));
+}
+
+function handleNativePaste(event) {
+  const inPasteField = event.currentTarget === pasteTarget;
+  if (inPasteField) event.stopPropagation();
+  const data = event.clipboardData;
   const files = transferredFiles(data);
   if (!inPasteField && !files.length) return;
-  ++pasteAttempt;
   event.preventDefault();
-  if (!files.length && inPasteField) {
+  if (inPasteField) resetPasteTarget();
+  if (building) return;
+
+  if (!files.length) {
     const encoded = data?.getData?.('text/plain') || '';
     const pdf = pdfFromShortcut(encoded);
     if (pdf) files.push(pdf);
   }
   if (files.length) {
-    void selectFile(files, inPasteField ? 'pasteStatus' : 'status');
+    status('', false, 'pasteStatus');
+    void selectFile(files, 'pasteStatus');
   } else {
-    status('This paste did not include a PDF. In Canvas, use Share → Send to PDF Expander and try again.', true, 'pasteStatus');
+    fileRequest++;
+    status(unreadablePaste, false, 'pasteStatus');
   }
 }
 
-document.addEventListener('paste', (event) => {
-  handleNativePaste(event, event.clipboardData);
-});
-
-pasteTarget.addEventListener('beforeinput', (event) => {
-  if (event.inputType === 'insertFromPaste') handleNativePaste(event, event.dataTransfer);
-});
+pasteTarget.addEventListener('paste', handleNativePaste);
+pasteTarget.addEventListener('input', resetPasteTarget);
+pasteTarget.addEventListener('blur', resetPasteTarget);
+window.addEventListener('paste', handleNativePaste);
 
 controls.addEventListener('input', () => {
   updateLayout();
